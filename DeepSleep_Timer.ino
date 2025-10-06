@@ -5,6 +5,8 @@
   - Sleeps immediately on cold boot, wakes after 10 seconds by timer
   - While asleep: button does nothing
   - After wake: pressing the button turns the LED ON
+
+  https://youtube.com/shorts/Df5EWCeMeLw?si=qilXFPKsgHH53Ag3
 */
 
 #include "driver/rtc_io.h"
