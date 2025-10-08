@@ -12,9 +12,9 @@
 #include "driver/rtc_io.h"
 #include "esp_sleep.h"
 
-#define WAKE_TIMER_SECONDS       10
-#define BUTTON_GPIO              33
-#define LED_PIN                  26
+#define WAKE_TIMER_SECONDS       10    // 10 seconds
+#define BUTTON_GPIO              33    // button GPIO
+#define LED_PIN                  26    // LED GPIO
 
 RTC_DATA_ATTR int bootCount = 0;
 
