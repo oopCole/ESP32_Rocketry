@@ -4,4 +4,4 @@ ICM_20948_I2C,
 
 Data Recorder [Not yet available]
 
-https://wiki.iteadstudio.com/Stackable_SD_Card_shield_V3.0
+SD Shield 3.0: https://wiki.iteadstudio.com/Stackable_SD_Card_shield_V3.0
