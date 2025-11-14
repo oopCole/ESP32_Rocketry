@@ -97,22 +97,24 @@ void loop() {
   }
 
   if (icm_ok) {
-    Serial.println("ICM Accel (mg):");
-    Serial.printf("  X: %.2f  Y: %.2f  Z: %.2f\n", acc_x, acc_y, acc_z);
+  Serial.print("ICM Accel (mg):");
+  Serial.printf("[ X: %.2f  Y: %.2f  Z: %.2f ]\n", acc_x, acc_y, acc_z);
 
-    Serial.println("ICM Gyro (dps):");
-    Serial.printf("  X: %.2f  Y: %.2f  Z: %.2f\n", gyr_x, gyr_y, gyr_z);
+  Serial.print("ICM Gyro (dps):");
+  Serial.printf("[ X: %.2f  Y: %.2f  Z: %.2f ]\n", gyr_x, gyr_y, gyr_z);
 
-    Serial.println("ICM Mag (uT):");
-    Serial.printf("  X: %.2f  Y: %.2f  Z: %.2f\n", mag_x, mag_y, mag_z);
+  Serial.print("ICM Mag (uT):");
+  Serial.printf("[ X: %.2f  Y: %.2f  Z: %.2f ]\n", mag_x, mag_y, mag_z);
 
-    Serial.print("ICM Temp (°C): ");
-    Serial.println(icm_temp_C, 2);
-  } else {
+  Serial.print("ICM Temp (°C): ");
+  Serial.println(icm_temp_C, 2);
+  }
+
+  else {
     Serial.println("ICM-20948 not initialized.");
   }
 
-  Serial.println("------------------------------\n");
+  Serial.println("-----------------------------\n");
 #else
   // CSV output (easy to log/plot) 
   Serial.printf(
