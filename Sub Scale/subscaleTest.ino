@@ -2,10 +2,9 @@
 // SDA = GPIO21, SCL = GPIO22
 
 #include <Wire.h>
-#include <Adafruit_MPL3115A2.h>
-#include <ICM_20948.h>   // SparkFun ICM-20948 library
+#include <Adafruit_MPL3115A2.h> // Altimeter
+#include <ICM_20948.h>   // IMU // SparkFun library
 
-// === Uncomment to output CSV instead of human-friendly text ===
 // #define OUTPUT_CSV
 
 Adafruit_MPL3115A2 mpl;
@@ -18,12 +17,11 @@ void setup() {
   Serial.begin(9600);
   delay(300);
 
-  // Use ESP32 default I2C pins (you can change if needed)
   Wire.begin(21, 22);
 
   Serial.println("\nStarting sensors...");
 
-  // ---------- MPL3115A2 (0x60) ----------
+  // MPL3115A2 (0x60)
   mpl_ok = mpl.begin();
   if (mpl_ok) {
     Serial.println("✅ MPL3115A2 detected at 0x60");
@@ -34,7 +32,7 @@ void setup() {
     Serial.println("❌ MPL3115A2 not detected (expect 0x60)");
   }
 
-  // ---------- ICM-20948 (0x68 or 0x69) ----------
+  // ICM-20948 (0x68 or 0x69) 
   icm.begin(Wire, 0); // 0 => 0x68
   if (icm.status != ICM_20948_Stat_Ok) {
     Serial.println("ICM-20948 not found at 0x68, trying 0x69...");
@@ -66,7 +64,7 @@ void loop() {
   // Timestamp for CSV
   unsigned long t = millis();
 
-  // ---------- Read MPL3115A2 ----------
+  // Read MPL3115A2 
   float alt_m = NAN, pres_Pa = NAN, mpl_temp_C = NAN;
   if (mpl_ok) {
     alt_m     = mpl.getAltitude();     // meters
@@ -74,7 +72,7 @@ void loop() {
     mpl_temp_C= mpl.getTemperature();  // °C
   }
 
-  // ---------- Read ICM-20948 ----------
+  // Read ICM-20948
   float acc_x= NAN, acc_y= NAN, acc_z= NAN; // mg
   float gyr_x= NAN, gyr_y= NAN, gyr_z= NAN; // dps
   float mag_x= NAN, mag_y= NAN, mag_z= NAN; // uT
@@ -90,7 +88,6 @@ void loop() {
   }
 
 #ifndef OUTPUT_CSV
-  // ---------- Pretty, labeled output ----------
   if (mpl_ok) {
     Serial.print("MPL Altitude (m): ");   Serial.println(alt_m, 2);
     Serial.print("MPL Pressure (Pa): ");  Serial.println(pres_Pa, 2);
@@ -117,8 +114,7 @@ void loop() {
 
   Serial.println("------------------------------\n");
 #else
-  // ---------- CSV output (easy to log/plot) ----------
-  // Use 'nan' where data isn't available
+  // CSV output (easy to log/plot) 
   Serial.printf(
     "%lu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
     t,
