@@ -14,7 +14,6 @@ void setup() {
   digitalWrite(SD_CS, HIGH);
   delay(10);
 
-  // Simple begin is fine; ESP32 core will use default SPI
   if (!SD.begin(SD_CS)) {
     Serial.println("SD init failed!");
     return;
