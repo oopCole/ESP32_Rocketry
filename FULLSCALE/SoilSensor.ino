@@ -1,3 +1,9 @@
+/*
+  Primary soil sensor
+  Measures EC, pH, and NO3–N (Nitrate-Nitrogen)
+
+  https://youtube.com/shorts/boy_2yaQp2w?si=t9RISODULN1ZBLDq
+*/
 
 #include <ModbusMaster.h>
 
@@ -40,7 +46,7 @@ void loop() {
   // Read 3 registers starting at 0x0002:
   // 0x0002 = EC (uS/cm)
   // 0x0003 = pH (raw * 0.1)
-  // 0x0004 = Nitrogen (mg/kg)
+  // 0x0004 = Nitrates (mg/kg)
   uint8_t result = node.readHoldingRegisters(0x0002, 3);
 
   if (result == node.ku8MBSuccess) {
