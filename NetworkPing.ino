@@ -1,3 +1,5 @@
+// Credit to Daniil Zykov for this btw
+
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include "lwip/etharp.h"
