@@ -3,7 +3,7 @@
   =======
   Boot: LEDs light red, yellow, green. 
         Servo activates (home: 40°, release: 90°)
-        Soil sensor
+        NO Soil sensor
         Deep cleep mode
     EN: Restarts
 */
