@@ -23,6 +23,11 @@
 #define MOVEMENT_THRESHOLD 200.0f  // m/s² acceleration threshold
 #define MIN_AWAKE_MS 5000 
 
+// Altitude band
+#define ALT_BAND_FT_LO  290.0f  // ignore this ugh
+#define ALT_BAND_FT_HI  310.0f  // ignore this ugh
+#define ALT_WAKE_THRESHOLD_M 10.0f
+
 // Display configuration
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -39,13 +44,21 @@
 #define TEMP_MIN  -50.0f
 #define TEMP_MAX   100.0f
 
-//LED bullshit to be removed for the servo instead at the later date
-#define LED_PIN        26
+// Servo
+#define SERVO_PIN      2
+#define PWM_FREQ       333
+#define PWM_RES        16
+#define SERVO_MOVE_MS  500
+#define PULSE_MIN_US   500  // 800
+#define PULSE_MAX_US   2500 // 2200
 
-// Altitude band
-#define ALT_BAND_FT_LO  280.0f
-#define ALT_BAND_FT_HI  320.0f
-#define METERS_PER_FT   0.3048f
+// ============= LINES FOR EDIT =================
+#define ANGLE_MIN      50   // HOME
+#define ANGLE_MAX      10   // RELEASE
+
+#define ALT_DESCENT_BAND_LO_M  (700.0f * 0.3048f)   // ~213 m
+#define ALT_DESCENT_BAND_HI_M  (721.0f * 0.3048f)   // ~219 m
+// ==============================================
 
 // Error codes
 #define ERROR_NONE 0
@@ -102,10 +115,8 @@ static float baro_temp = 25.0f;
 static bool  baro_triggered = false;
 static unsigned long baro_trigger_ms = 0;
 
-// Altitude band descending stuff
-static float last_alt_ft = 0.0f;
-static bool  triggered_this_descent = false;
-static bool  led_has_triggered = false;  // once true, LED stays on 
+static float alt_ref_m = 0.0f;
+static bool  alt_ref_initialized = false;
 
 // Rule 5: Assertion for recovery
 bool assertRange(float value, float min, float max, int errorCode) {
@@ -222,9 +233,42 @@ bool initLogFile(void) {
   return false;
 }
 
-// LED on when altitude band trigger condition is met (descending 400–500 ft); off otherwise
-void updateAltitudeLED(bool trigger_met) {
-  digitalWrite(LED_PIN, trigger_met ? HIGH : LOW);
+// Servo: move to release angle when altitude band condition is detected (replaces LED)
+static uint32_t period_us(void) {
+  return 1000000UL / PWM_FREQ;
+}
+static uint32_t usToDuty(uint32_t pulse_us) {
+  uint32_t maxDuty = (1UL << PWM_RES) - 1UL;
+  uint32_t period  = period_us();
+  if (pulse_us > period) pulse_us = period;
+  return (pulse_us * maxDuty) / period;
+}
+static void writeServoPulse(uint32_t pulse_us) {
+  ledcWrite(SERVO_PIN, usToDuty(pulse_us));
+}
+static void writeServoAngle(int angle) {
+  angle = constrain(angle, ANGLE_MIN, ANGLE_MAX);
+  long pulse = map(angle, ANGLE_MIN, ANGLE_MAX, PULSE_MIN_US, PULSE_MAX_US);
+  writeServoPulse((uint32_t)pulse);
+}
+
+void updateAltitudeServo(float altitude_m) {
+  static bool has_been_above_band = false;
+  static bool servo_triggered = false;
+
+  // Arm once we've genuinely climbed above the band
+  if (altitude_m > ALT_DESCENT_BAND_HI_M) {
+    has_been_above_band = true;
+  }
+
+  // Trigger servo (release) when we've descended through to below the low band
+  if (has_been_above_band && altitude_m < ALT_DESCENT_BAND_LO_M) {
+    if (!servo_triggered) {
+      servo_triggered = true;
+      writeServoAngle(ANGLE_MAX);   // release
+      delay(SERVO_MOVE_MS);
+    }
+  }
 }
 
 
@@ -437,7 +481,7 @@ bool writeLogData(const SensorData* data) {
 }
 
 // Rule 4: Update display with sensor data
-void updateDisplay(const SensorData* data, bool moving, unsigned long idle_ms, bool desc_triggered) {
+void updateDisplay(const SensorData* data, bool moving, unsigned long idle_ms) {
   if (!display_ok || data == NULL) return;
 
   display.clearDisplay();
@@ -474,10 +518,6 @@ void updateDisplay(const SensorData* data, bool moving, unsigned long idle_ms, b
   // Movement status
   display.print("MOV: ");
   display.println(moving ? "YES" : "NO ");
-
-  // 400–500 ft descending trigger (no servo in this sketch)
-  display.print("Desc500-400: ");
-  display.println(desc_triggered ? "YES" : "NO ");
 
   // Sleep countdown
   long remaining = ((long)MIN_AWAKE_MS - (long)idle_ms) / 1000;
@@ -632,9 +672,13 @@ void setup() {
   Wire.setTimeOut(100);
   delay(500);
   Serial.begin(115200);
-  delay(500); 
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);  // LED = altitude band trigger indicator
+  delay(500);
+  // Servo init (replaces LED)
+  if (!ledcAttach(SERVO_PIN, PWM_FREQ, PWM_RES)) {
+    Serial.println("LEDC attach failed!");
+  } else {
+    writeServoAngle(ANGLE_MIN);   // home at startup 
+  }
 
   // I2C SCANNER — remove after diagnosis
   Serial.println("Scanning I2C bus...");
@@ -672,60 +716,57 @@ void setup() {
 
 // Rule 4: Main loop kept under 60 lines
 void loop() {
-  // Rule 6: Local scope for sensor data
   Serial.printf("loop tick — icm_ok:%d mpl_ok:%d\n", icm_ok, mpl_ok);
 
   SensorData data = {0};
   data.timestamp = millis();
   Serial.println("A");
-  // Read sensors with error checking
+
   bool imu_success = readIMUSensors(&data);
   Serial.println("A2");
   bool baro_success = pollBarometer(&data);
   Serial.println("B");
-  // Rule 5: Only process if we have valid data
+
   if (!imu_success || !baro_success) {
     if (display_ok) {
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.print("Sensor fail: ");
-    display.print(imu_success  ? "" : "IMU ");
-    display.print(baro_success ? "" : "BARO");
-    display.display();
+      display.clearDisplay();
+      display.setCursor(0, 0);
+      display.print("Sensor fail: ");
+      display.print(imu_success  ? "" : "IMU ");
+      display.print(baro_success ? "" : "BARO");
+      display.display();
+    }
+    Serial.printf("Sensor fail — IMU:%d BARO:%d err:%d\n",
+                  imu_success, baro_success, error_state);
+    delay(LOOP_DELAY_MS);
+    return;
   }
-  Serial.printf("Sensor fail — IMU:%d BARO:%d err:%d\n",
-                imu_success, baro_success, error_state);
-  delay(LOOP_DELAY_MS);
-  return;
-  }
+
   Serial.println("sensors OK");
+  updateAltitudeServo(data.altitude);
 
-  // Altitude band descending trigger
-  float alt_ft = data.altitude / METERS_PER_FT;
-  bool in_band = (alt_ft >= ALT_BAND_FT_LO && alt_ft <= ALT_BAND_FT_HI);
-  bool descending = (alt_ft < last_alt_ft);
-  bool desc_triggered = false;
-  if (in_band && descending && !triggered_this_descent) {
-    triggered_this_descent = true;
-    desc_triggered = true;  // trigger condition met
-    led_has_triggered = true;  // LED on
-  }
-  if (!in_band) triggered_this_descent = false;
-  last_alt_ft = alt_ft;
-
-  // LED turns on when altitude band trigger is met
-  updateAltitudeLED(led_has_triggered);
-  
-  // Check for movement
+  // Movement check
   bool movement_detected = detectMovement(data.ax, data.ay, data.az);
-  
   if (movement_detected) {
-    wake_time_ms = millis();  // Reset the idle timer on any movement
+    wake_time_ms = millis();
   }
+
+  // Altitude change check
+  if (!alt_ref_initialized) {
+    alt_ref_m = data.altitude;
+    alt_ref_initialized = true;
+  }
+  float alt_delta = fabsf(data.altitude - alt_ref_m);
+  if (alt_delta >= ALT_WAKE_THRESHOLD_M) {
+    wake_time_ms = millis();
+    alt_ref_m = data.altitude;
+    Serial.printf("Alt change %.1fm — resetting idle timer\n", alt_delta);
+  }  // <-- block closes HERE, not after everything else
+
   unsigned long awake_ms = millis() - wake_time_ms;
 
   writeLogData(&data);
-  updateDisplay(&data, movement_detected, awake_ms, desc_triggered);
+  updateDisplay(&data, movement_detected, awake_ms);
   flushLogFile();
 
   if (awake_ms > MIN_AWAKE_MS) enterLightSleep();
