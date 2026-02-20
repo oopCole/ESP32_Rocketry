@@ -17,7 +17,6 @@
 #define FLUSH_INTERVAL_MS 2000
 #define LOOP_DELAY_MS 20
 #define BARO_CONVERSION_MS 8   // OSR=0: ~6ms, give 8ms margin
-#define BARO_ALT_SMOOTH_ALPHA 0.2f  // 0=no smooth, 1=no filter; 0.2 = heavy smoothing for noisy baro
 
 // Sleep configuration
 #define SLEEP_DURATION_SEC 5
@@ -39,6 +38,16 @@
 #define ALT_MAX    10000.0f
 #define TEMP_MIN  -50.0f
 #define TEMP_MAX   100.0f
+
+//LED bullshit to be removed for the servo instead at the later date
+#define LED_PIN        26
+#define ALT_FEET_THRESHOLD 20.0f
+#define ALT_METERS_THRESHOLD (ALT_FEET_THRESHOLD * 0.3048f)  // ~6.096m
+
+// Altitude band
+#define ALT_BAND_FT_LO  180.0f
+#define ALT_BAND_FT_HI  220.0f
+#define METERS_PER_FT   0.3048f
 
 // Error codes
 #define ERROR_NONE 0
@@ -91,10 +100,13 @@ bool display_ok = false;
 int error_state = ERROR_NONE;
 static unsigned long wake_time_ms = 0;
 static float baro_alt  = 0.0f;
-static float baro_alt_smooth = 0.0f;  // for exponential moving average
 static float baro_temp = 25.0f;
 static bool  baro_triggered = false;
 static unsigned long baro_trigger_ms = 0;
+
+// Altitude band 400–500 ft descending: state (no servo in this sketch)
+static float last_alt_ft = 0.0f;
+static bool  triggered_this_descent = false;
 
 // Rule 5: Assertion for recovery
 bool assertRange(float value, float min, float max, int errorCode) {
@@ -211,6 +223,28 @@ bool initLogFile(void) {
   return false;
 }
 
+//LED bullshit function 
+void updateAltitudeLED(float altitude_m) {
+  static bool led_state = false;
+  static unsigned long last_blink_ms = 0;
+
+  if (altitude_m >= ALT_METERS_THRESHOLD) {
+    // Blink at 2 Hz (toggle every 250ms)
+    unsigned long now = millis();
+    if (now - last_blink_ms >= 250) {
+      led_state = !led_state;
+      digitalWrite(LED_PIN, led_state ? HIGH : LOW);
+      last_blink_ms = now;
+    }
+  } else {
+    // Below threshold — ensure LED is off
+    led_state = false;
+    digitalWrite(LED_PIN, LOW);
+  }
+}
+
+
+
 void triggerBarometer(void) {
   if (!mpl_ok) return;
   // Set OST bit (one-shot trigger) while keeping OSR=0, ALT=1, SBYB=1
@@ -274,11 +308,11 @@ bool pollBarometer(SensorData* data) {
   uint8_t t_msb = Wire.read();
   uint8_t t_lsb = Wire.read();
 
-  // Altitude: 20-bit signed, Q16.4 format — 1 LSB = 1/16 m (datasheet)
-  int32_t alt_raw = ((int32_t)(int8_t)p_msb << 16) |
-                    ((uint32_t)p_csb << 8) |
-                    (uint32_t)p_lsb;
-  float alt = alt_raw / 16.0f;  // Q16.4: altitude_m = raw / 16
+  // Altitude: 20-bit signed, Q16.4 format (integer metres in upper 16 bits)
+  int32_t alt_raw = ((int32_t)(int8_t)p_msb << 12) |
+                    ((uint32_t)p_csb << 4) |
+                    (p_lsb >> 4);
+  float alt = alt_raw / 16.0f;  // 1 LSB = 0.0625 m
 
   // Temperature: 12-bit signed Q8.4
   int16_t t_raw = ((int16_t)(int8_t)t_msb << 8) | t_lsb;
@@ -287,11 +321,8 @@ bool pollBarometer(SensorData* data) {
   if (!assertRange(alt,  ALT_MIN, ALT_MAX,  ERROR_SENSOR_RANGE)) return false;
   if (!assertRange(temp, TEMP_MIN, TEMP_MAX, ERROR_SENSOR_RANGE)) return false;
 
+  baro_alt  = alt;
   baro_temp = temp;
-  // Exponential smoothing: reduces noise so "barely moved" doesn't show 90 m jumps
-  if (baro_alt_smooth == 0.0f && baro_alt == 0.0f) baro_alt_smooth = alt;
-  else baro_alt_smooth += BARO_ALT_SMOOTH_ALPHA * (alt - baro_alt_smooth);
-  baro_alt  = baro_alt_smooth;
   data->altitude    = baro_alt;
   data->temperature = baro_temp;
 
@@ -422,7 +453,7 @@ bool writeLogData(const SensorData* data) {
 }
 
 // Rule 4: Update display with sensor data
-void updateDisplay(const SensorData* data, bool moving, unsigned long idle_ms) {
+void updateDisplay(const SensorData* data, bool moving, unsigned long idle_ms, bool desc_triggered) {
   if (!display_ok || data == NULL) return;
 
   display.clearDisplay();
@@ -459,6 +490,10 @@ void updateDisplay(const SensorData* data, bool moving, unsigned long idle_ms) {
   // Movement status
   display.print("MOV: ");
   display.println(moving ? "YES" : "NO ");
+
+  // 400–500 ft descending trigger (no servo in this sketch)
+  display.print("Desc500-400: ");
+  display.println(desc_triggered ? "YES" : "NO ");
 
   // Sleep countdown
   long remaining = ((long)MIN_AWAKE_MS - (long)idle_ms) / 1000;
@@ -614,6 +649,10 @@ void setup() {
   delay(500);
   Serial.begin(115200);
   delay(500); 
+  //LED bullshit, replace with servo
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
   // I2C SCANNER — remove after diagnosis
   Serial.println("Scanning I2C bus...");
   for (uint8_t addr = 1; addr < 127; addr++) {
@@ -677,6 +716,19 @@ void loop() {
   return;
   }
   Serial.println("sensors OK");
+  updateAltitudeLED(data.altitude);
+
+  // Altitude band
+  float alt_ft = data.altitude / METERS_PER_FT;
+  bool in_band = (alt_ft >= ALT_BAND_FT_LO && alt_ft <= ALT_BAND_FT_HI);
+  bool descending = (alt_ft < last_alt_ft);
+  bool desc_triggered = false;
+  if (in_band && descending && !triggered_this_descent) {
+    triggered_this_descent = true;
+    desc_triggered = true;  // trigger condition met (e.g. for future servo)
+  }
+  if (!in_band) triggered_this_descent = false;
+  last_alt_ft = alt_ft;
   
   // Check for movement
   bool movement_detected = detectMovement(data.ax, data.ay, data.az);
@@ -687,7 +739,7 @@ void loop() {
   unsigned long awake_ms = millis() - wake_time_ms;
 
   writeLogData(&data);
-  updateDisplay(&data, movement_detected, awake_ms);
+  updateDisplay(&data, movement_detected, awake_ms, desc_triggered);
   flushLogFile();
 
   if (awake_ms > MIN_AWAKE_MS) enterLightSleep();
