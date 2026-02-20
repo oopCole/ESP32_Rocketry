@@ -43,8 +43,8 @@
 #define LED_PIN        26
 
 // Altitude band
-#define ALT_BAND_FT_LO  180.0f
-#define ALT_BAND_FT_HI  220.0f
+#define ALT_BAND_FT_LO  280.0f
+#define ALT_BAND_FT_HI  320.0f
 #define METERS_PER_FT   0.3048f
 
 // Error codes
