@@ -41,8 +41,6 @@
 
 //LED bullshit to be removed for the servo instead at the later date
 #define LED_PIN        26
-#define ALT_FEET_THRESHOLD 20.0f
-#define ALT_METERS_THRESHOLD (ALT_FEET_THRESHOLD * 0.3048f)  // ~6.096m
 
 // Altitude band
 #define ALT_BAND_FT_LO  180.0f
@@ -104,9 +102,10 @@ static float baro_temp = 25.0f;
 static bool  baro_triggered = false;
 static unsigned long baro_trigger_ms = 0;
 
-// Altitude band 400–500 ft descending: state (no servo in this sketch)
+// Altitude band descending stuff
 static float last_alt_ft = 0.0f;
 static bool  triggered_this_descent = false;
+static bool  led_has_triggered = false;  // once true, LED stays on 
 
 // Rule 5: Assertion for recovery
 bool assertRange(float value, float min, float max, int errorCode) {
@@ -223,24 +222,9 @@ bool initLogFile(void) {
   return false;
 }
 
-//LED bullshit function 
-void updateAltitudeLED(float altitude_m) {
-  static bool led_state = false;
-  static unsigned long last_blink_ms = 0;
-
-  if (altitude_m >= ALT_METERS_THRESHOLD) {
-    // Blink at 2 Hz (toggle every 250ms)
-    unsigned long now = millis();
-    if (now - last_blink_ms >= 250) {
-      led_state = !led_state;
-      digitalWrite(LED_PIN, led_state ? HIGH : LOW);
-      last_blink_ms = now;
-    }
-  } else {
-    // Below threshold — ensure LED is off
-    led_state = false;
-    digitalWrite(LED_PIN, LOW);
-  }
+// LED on when altitude band trigger condition is met (descending 400–500 ft); off otherwise
+void updateAltitudeLED(bool trigger_met) {
+  digitalWrite(LED_PIN, trigger_met ? HIGH : LOW);
 }
 
 
@@ -649,9 +633,8 @@ void setup() {
   delay(500);
   Serial.begin(115200);
   delay(500); 
-  //LED bullshit, replace with servo
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
+  digitalWrite(LED_PIN, LOW);  // LED = altitude band trigger indicator
 
   // I2C SCANNER — remove after diagnosis
   Serial.println("Scanning I2C bus...");
@@ -716,19 +699,22 @@ void loop() {
   return;
   }
   Serial.println("sensors OK");
-  updateAltitudeLED(data.altitude);
 
-  // Altitude band
+  // Altitude band descending trigger
   float alt_ft = data.altitude / METERS_PER_FT;
   bool in_band = (alt_ft >= ALT_BAND_FT_LO && alt_ft <= ALT_BAND_FT_HI);
   bool descending = (alt_ft < last_alt_ft);
   bool desc_triggered = false;
   if (in_band && descending && !triggered_this_descent) {
     triggered_this_descent = true;
-    desc_triggered = true;  // trigger condition met (e.g. for future servo)
+    desc_triggered = true;  // trigger condition met
+    led_has_triggered = true;  // LED on
   }
   if (!in_band) triggered_this_descent = false;
   last_alt_ft = alt_ft;
+
+  // LED turns on when altitude band trigger is met
+  updateAltitudeLED(led_has_triggered);
   
   // Check for movement
   bool movement_detected = detectMovement(data.ax, data.ay, data.az);
