@@ -1,0 +1,160 @@
+#include <WiFi.h>
+
+// ---------- Wi-Fi ----------
+const char* WIFI_SSID = "NinerWiFi-Guest";
+const char* WIFI_PASS = "";
+
+// TCP server port (avoid 23 if your network blocks telnet; 2323 is common)
+static const uint16_t TCP_PORT = 2323;
+WiFiServer server(TCP_PORT);
+WiFiClient client;
+
+// ---------- Servo PWM (your existing settings) ----------
+#define SERVO_PIN    4
+#define PWM_FREQ     333
+#define PWM_RES      16
+
+static const int PULSE_MIN_US = 800;
+static const int PULSE_MAX_US = 2200;
+static const int ANGLE_MIN    = -60;
+static const int ANGLE_MAX    =  60;
+
+// Desired ROM
+static const int ANGLE_INIT = 50; // boot position
+static const int ANGLE_GO   = 10; // commanded position
+
+uint32_t period_us() {
+  return 1000000UL / PWM_FREQ;
+}
+
+uint32_t usToDuty(uint32_t pulse_us) {
+  uint32_t maxDuty = (1UL << PWM_RES) - 1UL;
+  uint32_t period  = period_us();
+  if (pulse_us > period) pulse_us = period;
+  return (pulse_us * maxDuty) / period;
+}
+
+void writeServoPulse(uint32_t pulse_us) {
+  ledcWrite(SERVO_PIN, usToDuty(pulse_us));
+}
+
+void writeServoAngle(int angle) {
+  angle = constrain(angle, ANGLE_MIN, ANGLE_MAX);
+  long pulse = map(angle, ANGLE_MIN, ANGLE_MAX, PULSE_MIN_US, PULSE_MAX_US);
+  writeServoPulse((uint32_t)pulse);
+}
+
+void sendHelp(Print& out) {
+  out.println("Commands:");
+  out.println("  go        -> move to 10 deg");
+  out.println("  home      -> move to 50 deg");
+  out.println("  10 / 50   -> move to angle");
+  out.println("  ?         -> help");
+  out.println();
+}
+
+void handleCommand(const String& raw, Print& out) {
+  String cmd = raw;
+  cmd.trim();
+  cmd.toLowerCase();
+  if (cmd.length() == 0) return;
+
+  if (cmd == "go") {
+    writeServoAngle(ANGLE_GO);
+    out.println("OK: moved to 10 deg");
+  } else if (cmd == "home") {
+    writeServoAngle(ANGLE_INIT);
+    out.println("OK: moved to 50 deg");
+  } else if (cmd == "?") {
+    sendHelp(out);
+  } else {
+    char *endp = nullptr;
+    long a = strtol(cmd.c_str(), &endp, 10);
+    bool parsed_ok = (endp != cmd.c_str()) && (*endp == '\0');
+
+    if (parsed_ok) {
+      writeServoAngle((int)a);
+      out.print("OK: moved to ");
+      out.print((int)a);
+      out.println(" deg");
+    } else {
+      out.print("ERR: unknown command '");
+      out.print(cmd);
+      out.println("'");
+      sendHelp(out);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(200);
+
+  // Attach PWM to servo pin
+  bool ok = ledcAttach(SERVO_PIN, PWM_FREQ, PWM_RES);
+  if (!ok) {
+    Serial.println("LEDC attach failed!");
+    while (true) {}
+  }
+
+  writeServoAngle(ANGLE_INIT); // boot at 50Â°
+  Serial.println("Servo initialized to 50 deg.");
+
+  // Connect Wi-Fi
+  Serial.print("Connecting to Wi-Fi: ");
+  Serial.println(WIFI_SSID);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(250);
+    Serial.print(".");
+    if (millis() - t0 > 15000) {  // 15s timeout
+      Serial.println("\nWi-Fi connect timeout. Rebooting...");
+      delay(500);
+      ESP.restart();
+    }
+  }
+
+  Serial.println("\nWi-Fi connected.");
+  Serial.print("ESP32 IP: ");
+  Serial.println(WiFi.localIP());
+
+  server.begin();
+  server.setNoDelay(true);
+  Serial.print("TCP server listening on port ");
+  Serial.println(TCP_PORT);
+}
+
+void loop() {
+  // Accept a new client if we don't have one (or it disconnected)
+  if (!client || !client.connected()) {
+    WiFiClient newClient = server.available();
+    if (newClient) {
+      client = newClient;
+      client.setNoDelay(true);
+      client.println("ESP32 Servo TCP Ready");
+      client.print("IP: ");
+      client.println(WiFi.localIP());
+      client.print("Type 'go' or 'home'. ");
+      client.println("End commands with ENTER.");
+      sendHelp(client);
+
+      Serial.println("Client connected.");
+    }
+    delay(5);
+    return;
+  }
+
+  // Read commands line-by-line
+  if (client.available()) {
+    String line = client.readStringUntil('\n');
+    handleCommand(line, client);
+
+    // Optional: echo to USB serial for debugging
+    Serial.print("TCP cmd: ");
+    Serial.println(line);
+  }
+}
