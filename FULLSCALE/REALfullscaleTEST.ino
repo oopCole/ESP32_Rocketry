@@ -279,7 +279,7 @@ void updateAltitudeServo(float altitude_m) {
     }
   }
 }
-//  ===== Servo end=====
+//  ===== Servo end =====
 
 void triggerBarometer(void) {
   if (!mpl_ok) return;
