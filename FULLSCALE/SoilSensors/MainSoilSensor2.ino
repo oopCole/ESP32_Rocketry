@@ -1,10 +1,6 @@
 /*
   primary soil sensor — JXBS-3001-TR style 7-in-1 on RS485 Modbus RTU (FC 0x03)
   reads only EC, pH, and soil nitrogen (N) from the vendor register map
-
-  copied from SoilSensorW; original left unchanged for older 3-register probe
-
-  https://youtube.com/shorts/boy_2yaQp2w?si=t9RISODULN1ZBLDq
 */
 
 #include <ModbusMaster.h>
