@@ -7,7 +7,9 @@
 
   Combined soil sensors + failsafes
   - STEMMA (I2C): moisture (0-1), temperature (C)
-  - Primary (RS485 Modbus): EC (uS/cm), pH, NO3-N (mg/kg)
+  - Primary (RS485 Modbus): EC (uS/cm), pH, soil nitrogen N (mg/kg)
+    JXBS-3001-TR style 7-in-1 probe — register map differs from older EC/pH/nitrate probe
+
   Logs every 1 second until power-off or reset.
 
   Failsafes:
@@ -35,19 +37,24 @@ const uint8_t SEESAW_ADDR = 0x36;
 const int SDA_PIN = 21;
 const int SCL_PIN = 22;
 
-// ----- Primary soil sensor (RS485 Modbus) -----
+// ----- Primary soil sensor (RS485 Modbus) — JXBS-3001-TR style -----
 #define RX2_PIN    16
 #define TX2_PIN    17
 #define RE_DE_PIN  4
 static const uint8_t SLAVE_ID = 1;
-static const uint32_t MODBUS_BAUD = 4800;
+// factory default 9600 8N1, address 1 (2400/4800 if reconfigured)
+static const uint32_t MODBUS_BAUD = 9600;
+// holding registers (differs from older probe single block at 0x0002)
+static const uint16_t REG_PH = 0x0006;
+static const uint16_t REG_EC = 0x0015;
+static const uint16_t REG_N  = 0x001E;
 ModbusMaster node;
 
 // ----- Moisture gate -----
 static const float MOIST_LO = 0.33f;    // 800
 static const float MOIST_HI = 0.46f;    // 1064
 static const uint8_t STABLE_CONSEC_SEC = 10;   // 10 s at 1 Hz in band
-static const uint8_t AVG_SAMPLES = 10;         // 10 s of averaging at 1 Hz
+static const uint8_t AVG_SAMPLES = 10;         // CHANGE to 60 
 
 // ----- Watchdog -----
 static const uint32_t WDT_TIMEOUT_SEC = 30;
@@ -188,6 +195,34 @@ static void printAveragesAndFinish() {
   g_phase = PHASE_DONE;
 }
 
+/** Read EC, pH, N from new sensor (separate holding registers). All three must succeed. */
+static bool readPrimarySoil(float& ec_uScm, float& ph, float& n_mgkg, uint8_t& mbResult) {
+  mbResult = node.ku8MBSuccess;
+
+  uint8_t r = node.readHoldingRegisters(REG_EC, 1);
+  if (r != node.ku8MBSuccess) {
+    mbResult = r;
+    return false;
+  }
+  ec_uScm = (float)node.getResponseBuffer(0);
+
+  r = node.readHoldingRegisters(REG_PH, 1);
+  if (r != node.ku8MBSuccess) {
+    mbResult = r;
+    return false;
+  }
+  ph = node.getResponseBuffer(0) * 0.01f;
+
+  r = node.readHoldingRegisters(REG_N, 1);
+  if (r != node.ku8MBSuccess) {
+    mbResult = r;
+    return false;
+  }
+  n_mgkg = (float)node.getResponseBuffer(0);
+
+  return true;
+}
+
 static void runOneSecondTick() {
   unsigned long now = millis();
   unsigned long elapsedSec = (now - runStartMs) / 1000;
@@ -199,13 +234,8 @@ static void runOneSecondTick() {
   bool stTempOk = stemmaTempInRange(tempC);
 
   float ec_uScm = 0, ph = 0, n_mgkg = 0;
-  uint8_t mbResult = node.readHoldingRegisters(0x0002, 3);
-  bool mbOk = (mbResult == node.ku8MBSuccess);
-  if (mbOk) {
-    ec_uScm = (float)node.getResponseBuffer(0);
-    ph = node.getResponseBuffer(1) * 0.1f;
-    n_mgkg = (float)node.getResponseBuffer(2);
-  }
+  uint8_t mbResult = node.ku8MBSuccess;
+  bool mbOk = readPrimarySoil(ec_uScm, ph, n_mgkg, mbResult);
   bool primRangeOk = mbOk && primaryValuesInRange(ec_uScm, ph, n_mgkg);
 
   const char* dataq;
@@ -315,7 +345,7 @@ void setup() {
   node.preTransmission(preTransmission);
   node.postTransmission(postTransmission);
   delay(750);
-  Serial.println("Primary sensor (Modbus) link initialized");
+  Serial.println("Primary sensor (Modbus, JXBS-3001-TR map) link initialized");
 
   g_phase = PHASE_WAIT_MOIST;
   g_stableConsec = 0;
